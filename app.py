@@ -140,15 +140,14 @@ _init()
 
 # ── Gemini config ──────────────────────────────────────────────────────────
 def configure_gemini(key: str) -> bool:
-    try:
-        from google import genai as _g
-        _g.Client(api_key=key)  # validate key by instantiating client
-        st.session_state.gemini_ok  = True
-        st.session_state.api_key    = key
-        os.environ["GEMINI_API_KEY"] = key
-        return True
-    except Exception:
+    """Accept any non-empty key — validation happens on first real API call."""
+    key = (key or "").strip()
+    if not key:
         return False
+    st.session_state.gemini_ok  = True
+    st.session_state.api_key    = key
+    os.environ["GEMINI_API_KEY"] = key
+    return True
 
 def gemini_call(prompt: str, system: str = "") -> str:
     if not st.session_state.gemini_ok:
