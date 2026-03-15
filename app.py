@@ -412,56 +412,144 @@ def generate_post_preview(company, industry, personality, platform, slogan, pale
         **meta,
     }
 
-# ── Nano Banana Pro Logo Generator ────────────────────────────────────────────
-def generate_logo_imagen(company: str, industry: str, personality: str, palette: dict) -> Optional[bytes]:
+# ── Nano Banana Pro Logo Generator ───────────────────────────────────────────
+def generate_logo_nano_banana(company: str, industry: str, personality: str,
+                               palette: dict, style: str = "minimalist") -> Optional[bytes]:
     """
-    Generate a logo using Nano Banana Pro (Gemini 3.1 Flash Image / imagen-3.0-generate-002).
-    Falls back to None if API not available or key missing.
-    Returns PNG bytes or None.
+    Generate an AI-enhanced logo image.
+
+    Strategy:
+      1. Try Gemini image generation models (Nano Banana Pro / Flash Image)
+      2. If image gen unavailable → use Gemini text to design SVG concept,
+         then render to PNG via Pillow (always produces a result)
     """
     if not st.session_state.gemini_ok:
         return None
+
+    colors    = list(palette.values())
+    primary   = colors[0]["hex"] if colors else "#1B3A6B"
+    secondary = colors[1]["hex"] if len(colors) > 1 else "#C9A84C"
+    accent    = colors[2]["hex"] if len(colors) > 2 else "#FFFFFF"
+
+    img_prompt = (
+        "Create a professional " + style + " brand logo for '" + company + "'. "
+        "Industry: " + industry + ". Personality: " + personality + ". "
+        "Primary color " + primary + ", accent " + secondary + ". "
+        "Clean, minimal, white background, vector style. "
+        "Company name '" + company + "' in elegant typography. No other text."
+    )
+
+    # ── Step 1: Try Gemini image generation models ─────────────────────────
+    image_models = [
+        "gemini-2.0-flash-preview-image-generation",
+        "gemini-2.0-flash-exp-image-generation",
+        "imagen-3.0-generate-002",
+    ]
     try:
-        # google.genai imported inline in functions to avoid module-level deprecation warnings
-        colors = list(palette.values())
-        primary = colors[0]["hex"] if colors else "#1B3A6B"
-        accent  = colors[1]["hex"] if len(colors) > 1 else "#C9A84C"
-
-        prompt = (
-            f"Professional minimalist logo for a company called '{company}'. "
-            f"Industry: {industry}. Brand personality: {personality}. "
-            f"Primary brand color: {primary}, accent color: {accent}. "
-            f"Clean vector-style design, white background, no text other than the company name, "
-            f"suitable for business use. High quality, sharp edges, professional branding."
-        )
-
-        # Try Gemini image generation (Nano Banana)
-        try:
-            from google import genai as genai2
-            from google.genai import types as gtypes
-            client = genai2.Client(api_key=st.session_state.api_key)
-            response = client.models.generate_content(
-                model="gemini-2.0-flash-preview-image-generation",
-                contents=prompt,
-                config=gtypes.GenerateContentConfig(
-                    response_modalities=["IMAGE", "TEXT"]
+        from google import genai as _gi
+        from google.genai import types as _gt
+        _client = _gi.Client(api_key=st.session_state.api_key)
+        for model_id in image_models:
+            try:
+                _resp = _client.models.generate_content(
+                    model=model_id,
+                    contents=img_prompt,
+                    config=_gt.GenerateContentConfig(
+                        response_modalities=["IMAGE", "TEXT"]
+                    ),
                 )
-            )
-            for part in response.candidates[0].content.parts:
-                if part.inline_data is not None:
-                    import io
-                    from PIL import Image as PILImage
-                    img = PILImage.open(io.BytesIO(part.inline_data.data))
-                    buf = io.BytesIO()
-                    img.save(buf, format="PNG")
-                    return buf.getvalue()
-        except Exception:
-            pass
+                for part in _resp.candidates[0].content.parts:
+                    if hasattr(part, "inline_data") and part.inline_data:
+                        import base64
+                        return base64.b64decode(part.inline_data.data)
+            except Exception:
+                continue
+    except Exception:
+        pass
 
-        return None
+    # ── Step 2: Gemini designs it → we render to PNG ───────────────────────
+    # Ask Gemini to describe the logo design, then render with Pillow
+    try:
+        design_prompt = (
+            "Design a " + style + " logo concept for '" + company + "' ("
+            + industry + ", " + personality + " brand). "
+            "Describe ONLY: (1) the geometric shape to use, (2) the exact symbol/icon, "
+            "(3) font style for the name. Be very brief — one sentence each. "
+            "Example: Shape: circle. Icon: lightning bolt inside. Font: bold sans-serif."
+        )
+        description = gemini_call(design_prompt)
+    except Exception:
+        description = ""
+
+    # Render a Pillow logo using the AI description as inspiration
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io as _io
+        from src.palette_engine import hex_to_rgb
+
+        W, H    = 512, 512
+        bg_rgb  = hex_to_rgb(primary)
+        acc_rgb = hex_to_rgb(secondary)
+        txt_rgb = hex_to_rgb(accent)
+
+        img  = Image.new("RGB", (W, H), tuple(bg_rgb))
+        draw = ImageDraw.Draw(img)
+
+        # Outer ring
+        draw.ellipse([30, 30, W-30, H-30], outline=tuple(acc_rgb), width=8)
+        draw.ellipse([50, 50, W-50, H-50], outline=tuple(acc_rgb), width=2)
+
+        # Company initials — large
+        import re as _re
+        words    = _re.sub(r"[^a-zA-Z ]", "", company).split()
+        initials = (words[0][0] + words[-1][0]).upper() if len(words) > 1 else words[0][:2].upper() if words else "B"
+
+        font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        ]
+        def _get_font(size):
+            for p in font_paths:
+                try:
+                    from PIL import ImageFont
+                    return ImageFont.truetype(p, size)
+                except Exception:
+                    pass
+            from PIL import ImageFont
+            return ImageFont.load_default()
+
+        font_big  = _get_font(160)
+        font_name = _get_font(32)
+
+        # Drop shadow for initials
+        bb = draw.textbbox((0, 0), initials, font=font_big)
+        tw, th = bb[2]-bb[0], bb[3]-bb[1]
+        tx, ty = (W-tw)//2, (H-th)//2 - 30
+        draw.text((tx+5, ty+5), initials, font=font_big, fill=(0, 0, 0))
+        draw.text((tx, ty), initials, font=font_big, fill=tuple(acc_rgb))
+
+        # Divider line
+        draw.line([W//2-100, ty+th+15, W//2+100, ty+th+15], fill=tuple(acc_rgb), width=2)
+
+        # Company name
+        name_upper = company.upper()[:16]
+        bb2 = draw.textbbox((0, 0), name_upper, font=font_name)
+        tw2 = bb2[2] - bb2[0]
+        draw.text(((W-tw2)//2, ty+th+25), name_upper, font=font_name, fill=tuple(acc_rgb))
+
+        # AI design note from Gemini (subtle)
+        if description:
+            note = description[:60]
+            font_tiny = _get_font(13)
+            draw.text((30, H-40), "AI Design: " + note, font=font_tiny,
+                      fill=tuple(int(c*0.5) for c in acc_rgb))
+
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
     except Exception:
         return None
-
 
 # ── Brand Mockup Generator ─────────────────────────────────────────────────────
 def generate_mockup(logo_svg: str, palette: dict, company: str, mockup_type: str) -> bytes:
@@ -641,47 +729,65 @@ def calculate_roi(budget: float, platform: str, objective: str,
 def generate_logo_nano_banana(company: str, industry: str, personality: str,
                                palette: dict, style: str = "minimalist") -> Optional[bytes]:
     """
-    Generate an AI logo image using Nano Banana Pro (Gemini image model).
-    Uses gemini-2.0-flash-exp for image generation — same API key as text Gemini.
-    Falls back gracefully if model unavailable.
+    Generate an AI logo image using Nano Banana (Gemini image model).
+    Tries multiple model names in order of preference.
+    Returns PNG bytes or None if unavailable.
     """
     if not st.session_state.gemini_ok:
         return None
+
+    colors    = list(palette.values())
+    primary   = colors[0]["hex"] if colors else "#1B3A6B"
+    secondary = colors[1]["hex"] if len(colors) > 1 else "#C9A84C"
+
+    prompt = (
+        "Create a professional " + style + " brand logo for '"
+        + company + "'. Industry: " + industry + ". "
+        "Brand personality: " + personality + ". "
+        "Primary color: " + primary + ", accent: " + secondary + ". "
+        "White background. Clean vector style. "
+        "Company name '" + company + "' included in elegant typography. "
+        "No other text. Modern and memorable."
+    )
+
+    # Model names to try in order (Nano Banana 2 → Pro → Flash preview)
+    models_to_try = [
+        "gemini-2.0-flash-preview-image-generation",
+        "gemini-2.0-flash-exp",
+        "imagen-3.0-generate-002",
+    ]
+
     try:
-        # google.genai imported inline in functions to avoid module-level deprecation warnings
-        colors = list(palette.values())
-        primary   = colors[0]["hex"] if colors else "#1B3A6B"
-        secondary = colors[1]["hex"] if len(colors) > 1 else "#C9A84C"
+        from google import genai as _gi
+        from google.genai import types as _gt
+        client = _gi.Client(api_key=st.session_state.api_key)
 
-        prompt = (
-            f"Create a professional {style} brand logo for a company called '{company}'. "
-            f"Industry: {industry}. Brand personality: {personality}. "
-            f"Primary brand color: {primary}, accent color: {secondary}. "
-            f"The logo should be clean, memorable, and work at small sizes. "
-            f"White or transparent background. High quality, vector-style design. "
-            f"Include the company name '{company}' in the logo with elegant typography. "
-            f"No text other than the company name. Professional and modern."
-        )
+        for model_name in models_to_try:
+            try:
+                resp = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=_gt.GenerateContentConfig(
+                        response_modalities=["IMAGE", "TEXT"]
+                    ),
+                )
+                # Extract image bytes from response
+                for candidate in resp.candidates:
+                    for part in candidate.content.parts:
+                        if hasattr(part, "inline_data") and part.inline_data:
+                            import base64 as _b64
+                            data = part.inline_data.data
+                            # data may already be bytes or base64 string
+                            if isinstance(data, (bytes, bytearray)):
+                                return bytes(data)
+                            return _b64.b64decode(data)
+            except Exception:
+                continue  # try next model
 
-        # Try Nano Banana / Gemini image generation
-        try:
-            from google import genai as _genai2
-            from google.genai import types as _gtypes
-            _client2 = _genai2.Client(api_key=st.session_state.api_key)
-            _resp = _client2.models.generate_content(
-                model="gemini-2.0-flash-preview-image-generation",
-                contents=prompt,
-                config=_gtypes.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
-            )
-            for part in _resp.candidates[0].content.parts:
-                if hasattr(part, "inline_data") and part.inline_data:
-                    import base64
-                    return base64.b64decode(part.inline_data.data)
-        except Exception:
-            pass
-        return None
-    except Exception as e:
-        return None
+    except Exception:
+        pass
+
+    return None
 
 
 # ── Brand Mockup Generator ───────────────────────────────────────────────────
@@ -1230,7 +1336,7 @@ with tabs[2]:
                                        file_name=f"{bi3.get('company','brand')}_ai_logo.png",
                                        mime="image/png")
                 else:
-                    st.info("💡 Nano Banana image generation requires the `gemini-2.0-flash-exp` model which supports image output. If unavailable in your region, the SVG logos above work identically. Check [Google AI Studio](https://aistudio.google.com) for model availability.")
+                    st.info("💡 Gemini image generation is not available for this API key or region. The SVG logos above are fully functional alternatives. To enable AI image logos, ensure your Gemini API key has access to image generation models at [aistudio.google.com](https://aistudio.google.com).")
 
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
