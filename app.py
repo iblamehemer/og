@@ -251,12 +251,15 @@ def generate_brand_story(bi):
 def generate_brand_names(industry: str, personality: str, keywords: str) -> list[dict]:
     """Generate creative brand name suggestions."""
     if st.session_state.gemini_ok:
-        raw = gemini_call(
-            f"Generate 8 creative, memorable brand names for a {personality.lower()} {industry} company. "
-            f"Keywords to consider: {keywords or 'none'}. "
+        pers_lower = personality.lower()
+        kw_str     = keywords or "none"
+        prompt_bn  = (
+            f"Generate 8 creative, memorable brand names for a {pers_lower} {industry} company. "
+            f"Keywords to consider: {kw_str}. "
             "For each name give: the name, a 1-line rationale, and a domain availability note. "
-            "Return JSON only: [{"name":"...","rationale":"...","domain":"..."}]"
+            "Return JSON only: array of objects with keys name, rationale, domain."
         )
+        raw = gemini_call(prompt_bn)
         try:
             import re as _re
             data = json.loads(_re.sub(r"```json|```","",raw).strip())
@@ -318,102 +321,91 @@ def check_wcag(palette: dict) -> list[dict]:
 def ab_test_taglines(taglines: list[dict], industry: str, audience: str) -> list[dict]:
     """Score taglines across 5 brand dimensions."""
     if st.session_state.gemini_ok and taglines:
-        texts = [f'{i+1}. {s["text"]}' for i, s in enumerate(taglines[:4])]
-        raw = gemini_call(
-            f"Score these brand taglines for a {industry} targeting {audience}.
-"
-            f"Taglines:
-" + "
-".join(texts) + "
-
-"
-            "Score each 1-10 on: Memorability, Clarity, Emotional Impact, Brand Fit, Uniqueness. "
-            "Return JSON: [{"tagline":"...","memorability":N,"clarity":N,"emotional_impact":N,"brand_fit":N,"uniqueness":N,"overall":N}]"
+        texts_str = " | ".join([s["text"] for s in taglines[:4]])
+        aud_str   = audience or "general consumers"
+        prompt_ab = (
+            "Score these brand taglines for a " + industry + " brand targeting " + aud_str + ". "
+            "Taglines: " + texts_str + ". "
+            "Score each tagline from 1-10 on: Memorability, Clarity, Emotional Impact, Brand Fit, Uniqueness. "
+            "Return a JSON array only. Each item must have keys: tagline, memorability, clarity, "
+            "emotional_impact, brand_fit, uniqueness, overall (average of the 5 scores)."
         )
+        raw = gemini_call(prompt_ab)
         try:
             import re as _re
-            data = json.loads(_re.sub(r"```json|```","",raw).strip())
+            data = json.loads(_re.sub(r"```json|```", "", raw).strip())
             return data if isinstance(data, list) else []
         except Exception:
             pass
-    # Offline scoring with deterministic heuristics
     import hashlib
     results = []
     for s in taglines[:4]:
         text = s["text"]
-        h = int(hashlib.md5(text.encode()).hexdigest(),16) % 100
-        mem = min(10, max(5, 7 + (h%4) - 1))
-        cla = min(10, max(5, 6 + (h%5) - 1))
-        emo = min(10, max(5, 7 + (h%3)))
-        fit = min(10, max(5, 8 + (h%2) - 1))
-        uni = min(10, max(5, 6 + (h%4)))
+        h    = int(hashlib.md5(text.encode()).hexdigest(), 16) % 100
+        mem  = min(10, max(5, 7 + (h % 4) - 1))
+        cla  = min(10, max(5, 6 + (h % 5) - 1))
+        emo  = min(10, max(5, 7 + (h % 3)))
+        fit  = min(10, max(5, 8 + (h % 2) - 1))
+        uni  = min(10, max(5, 6 + (h % 4)))
         results.append({"tagline": text[:50],
                         "memorability": mem, "clarity": cla,
                         "emotional_impact": emo, "brand_fit": fit,
-                        "uniqueness": uni, "overall": round((mem+cla+emo+fit+uni)/5,1)})
+                        "uniqueness": uni, "overall": round((mem+cla+emo+fit+uni)/5, 1)})
     return sorted(results, key=lambda x: -x["overall"])
-
 
 # ── Social Media Post Previewer ────────────────────────────────────────────────
 def generate_post_preview(company, industry, personality, platform, slogan, palette):
     """Generate platform-specific post content and preview data."""
     platforms_meta = {
         "Instagram": {"char_limit": 2200, "best_format": "Square image + carousel",
-                      "cta": "👉 Link in bio", "hashtag_count": "10–15"},
+                      "cta": "👉 Link in bio", "hashtag_count": "10-15"},
         "LinkedIn":  {"char_limit": 3000, "best_format": "Article or document post",
-                      "cta": "🔗 See more in comments", "hashtag_count": "3–5"},
+                      "cta": "See more in comments", "hashtag_count": "3-5"},
         "Twitter/X": {"char_limit": 280,  "best_format": "Text + image",
-                      "cta": "🔁 RT if you agree", "hashtag_count": "2–3"},
+                      "cta": "RT if you agree", "hashtag_count": "2-3"},
         "Facebook":  {"char_limit": 500,  "best_format": "Video or link post",
-                      "cta": "👍 Share with your network", "hashtag_count": "5–10"},
+                      "cta": "Share with your network", "hashtag_count": "5-10"},
         "TikTok":    {"char_limit": 150,  "best_format": "Short vertical video 9:16",
-                      "cta": "🎵 Sound on", "hashtag_count": "5–8"},
+                      "cta": "Sound on", "hashtag_count": "5-8"},
+        "YouTube":   {"char_limit": 5000, "best_format": "Long-form video",
+                      "cta": "Subscribe for more", "hashtag_count": "3-5"},
     }
-    meta = platforms_meta.get(platform, platforms_meta["Instagram"])
-    colors = list(palette.values())
+    meta    = platforms_meta.get(platform, platforms_meta["Instagram"])
+    colors  = list(palette.values())
     primary = colors[0]["hex"] if colors else "#1B3A6B"
     accent  = colors[1]["hex"] if len(colors) > 1 else "#C9A84C"
 
     if st.session_state.gemini_ok:
-        raw = gemini_call(
-            f"Write a {platform} post for {company} ({industry}, {personality} brand).
-"
-            f"Tagline: '{slogan}'
-Char limit: {meta['char_limit']}.
-"
-            "Include caption, 5 hashtags, and a CTA. "
-            "Return JSON: {"caption":"...","hashtags":["..."],"cta":"...","hook":"..."}"
+        char_lim = str(meta["char_limit"])
+        prompt_post = (
+            "Write a " + platform + " marketing post for " + company + " (" + industry + ", " + personality + " brand). "
+            "Tagline: " + slogan + ". Character limit: " + char_lim + ". "
+            "Include a caption, 5 relevant hashtags, a CTA, and a scroll-stopping hook. "
+            "Return JSON only with keys: caption, hashtags (array), cta, hook."
         )
+        raw = gemini_call(prompt_post)
         try:
             import re as _re
-            data = json.loads(_re.sub(r"```json|```","",raw).strip())
+            data = json.loads(_re.sub(r"```json|```", "", raw).strip())
             data.update(meta)
             data["primary"] = primary
-            data["accent"] = accent
+            data["accent"]  = accent
             return data
         except Exception:
             pass
 
-    co_tag = company.replace(" ","")
-    ind_tag = industry.split("/")[0].strip().replace(" ","")
+    co_tag  = company.replace(" ", "")
+    ind_tag = industry.split("/")[0].strip().replace(" ", "")
     return {
-        "caption": f"Introducing {company} — {slogan}
-
-Built for tomorrow. Designed for today. "
-                   f"Discover why leaders in {industry.lower()} trust us.
-
-{meta['cta']}",
-        "hashtags": [f"#{co_tag}", f"#{ind_tag}", "#BrandLaunch", "#Innovation", "#AI"],
-        "cta":  meta["cta"],
-        "hook": f"What if {industry.lower()} could work smarter for you?",
-        "primary": primary, "accent": accent,
+        "caption":  "Introducing " + company + " — " + slogan + "\n\nBuilt for tomorrow. Designed for today. " +
+                    "Discover why leaders in " + industry.lower() + " trust us.\n\n" + meta["cta"],
+        "hashtags": ["#" + co_tag, "#" + ind_tag, "#BrandLaunch", "#Innovation", "#AI"],
+        "cta":      meta["cta"],
+        "hook":     "What if " + industry.lower() + " could work smarter for you?",
+        "primary":  primary,
+        "accent":   accent,
         **meta,
     }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  NEW FEATURE HELPERS — BATCH 2
-# ══════════════════════════════════════════════════════════════════════════════
 
 # ── Nano Banana Pro Logo Generator ────────────────────────────────────────────
 def generate_logo_imagen(company: str, industry: str, personality: str, palette: dict) -> bytes | None:
@@ -1134,7 +1126,7 @@ with tabs[1]:
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     st.markdown('<p class="sec-label">✨ Brand Name Generator</p>', unsafe_allow_html=True)
-    st.markdown('<h3 style="font-family:var(--font-head);font-weight:300;color:var(--text);margin-bottom:12px">Haven't decided on a name? <em style="color:var(--accent)">Let AI suggest one.</em></h3>', unsafe_allow_html=True)
+    st.markdown('<h3 style="font-family:var(--font-head);font-weight:300;color:var(--text);margin-bottom:12px">No name yet? <em style="color:var(--accent)">Let AI suggest one.</em></h3>', unsafe_allow_html=True)
     ng1, ng2, ng3 = st.columns([1,1,1], gap="large")
     with ng1:
         ng_industry = st.selectbox("Industry", INDUSTRIES, key="ng_ind")
