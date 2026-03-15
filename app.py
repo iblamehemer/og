@@ -18,6 +18,7 @@ Tabs:
 """
 
 import os, sys, uuid, json, re, time, datetime, logging
+from typing import List, Dict, Optional
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -140,8 +141,8 @@ _init()
 # ── Gemini config ──────────────────────────────────────────────────────────
 def configure_gemini(key: str) -> bool:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=key)
+        from google import genai as _g
+        _g.Client(api_key=key)  # validate key by instantiating client
         st.session_state.gemini_ok  = True
         st.session_state.api_key    = key
         os.environ["GEMINI_API_KEY"] = key
@@ -153,40 +154,45 @@ def gemini_call(prompt: str, system: str = "") -> str:
     if not st.session_state.gemini_ok:
         return ""
     try:
-        import google.generativeai as genai
-        model = genai.GenerativeModel("gemini-2.0-flash",
-                                       system_instruction=system or None)
-        return model.generate_content(prompt).text.strip()
+        from google import genai as _genai
+        from google.genai import types as _types
+        client = _genai.Client(api_key=st.session_state.api_key)
+        cfg    = _types.GenerateContentConfig(
+            system_instruction=system if system else None,
+            temperature=0.8,
+            max_output_tokens=1500,
+        )
+        resp = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=cfg,
+        )
+        return resp.text.strip()
     except Exception as e:
         return ""
 
-# ── Auto-configure from env / streamlit secrets ────────────────────────────
-_env_key = os.getenv("GEMINI_API_KEY", "")
-if not _env_key:
-    try:
-        _env_key = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception:
-        pass
-if _env_key and not st.session_state.gemini_ok:
-    configure_gemini(_env_key)
 
 # ── Import src modules ─────────────────────────────────────────────────────
-from src.config import (INDUSTRIES, PERSONALITIES, TONES, PLATFORMS,
-                         REGIONS, LANGUAGES_SUPPORTED, CAMPAIGN_OBJECTIVES, COLOR_NAMES)
-from src.palette_engine   import generate_palette, score_palette_harmony
-from src.font_engine      import recommend_fonts
-from src.logo_engine      import generate_all_logos, svg_to_png_bytes
-from src.slogan_engine    import generate_slogans, nltk_analyze
+from src.config import (
+    INDUSTRIES, PERSONALITIES, TONES, PLATFORMS,
+    REGIONS, LANGUAGES_SUPPORTED, CAMPAIGN_OBJECTIVES, COLOR_NAMES,
+    COLOR_PSYCHOLOGY,
+)
+from src.palette_engine    import generate_palette, score_palette_harmony
+from src.font_engine       import recommend_fonts
+from src.logo_engine       import generate_all_logos, svg_to_png_bytes
+from src.slogan_engine     import generate_slogans, nltk_analyze
 from src.aesthetics_engine import score_brand, gemini_recommendations
 from src.multilingual_engine import translate_slogan, validate_translations
 from src.animation_engine  import create_brand_gif
 from src.feedback_engine   import save_feedback, load_feedback, get_summary
 from src.export_engine     import build_brand_kit_zip
-from src.dashboard_engine  import (kpi_bar_chart, regional_engagement_map,
-                                    personality_radar, feedback_bar, feedback_pie,
-                                    campaign_scatter)
+from src.dashboard_engine  import (
+    kpi_bar_chart, regional_engagement_map,
+    personality_radar, feedback_bar, feedback_pie, campaign_scatter,
+)
 
-# ── Lazy campaign predictor ────────────────────────────────────────────────
+
 @st.cache_resource
 def get_predictor():
     from src.campaign_predictor import predictor
@@ -248,7 +254,7 @@ def generate_brand_story(bi):
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Brand Name Generator ───────────────────────────────────────────────────────
-def generate_brand_names(industry: str, personality: str, keywords: str) -> list[dict]:
+def generate_brand_names(industry: str, personality: str, keywords: str) -> List[Dict]:
     """Generate creative brand name suggestions."""
     if st.session_state.gemini_ok:
         pers_lower = personality.lower()
@@ -286,7 +292,7 @@ def generate_brand_names(industry: str, personality: str, keywords: str) -> list
 
 
 # ── Color Accessibility Checker (WCAG) ────────────────────────────────────────
-def check_wcag(palette: dict) -> list[dict]:
+def check_wcag(palette: dict) -> List[Dict]:
     """Check WCAG contrast ratios between palette color pairs."""
     from src.palette_engine import hex_to_rgb
 
@@ -318,7 +324,7 @@ def check_wcag(palette: dict) -> list[dict]:
 
 
 # ── A/B Tagline Tester ─────────────────────────────────────────────────────────
-def ab_test_taglines(taglines: list[dict], industry: str, audience: str) -> list[dict]:
+def ab_test_taglines(taglines: List[Dict], industry: str, audience: str) -> List[Dict]:
     """Score taglines across 5 brand dimensions."""
     if st.session_state.gemini_ok and taglines:
         texts_str = " | ".join([s["text"] for s in taglines[:4]])
@@ -408,7 +414,7 @@ def generate_post_preview(company, industry, personality, platform, slogan, pale
     }
 
 # ── Nano Banana Pro Logo Generator ────────────────────────────────────────────
-def generate_logo_imagen(company: str, industry: str, personality: str, palette: dict) -> bytes | None:
+def generate_logo_imagen(company: str, industry: str, personality: str, palette: dict) -> Optional[bytes]:
     """
     Generate a logo using Nano Banana Pro (Gemini 3.1 Flash Image / imagen-3.0-generate-002).
     Falls back to None if API not available or key missing.
@@ -417,7 +423,7 @@ def generate_logo_imagen(company: str, industry: str, personality: str, palette:
     if not st.session_state.gemini_ok:
         return None
     try:
-        import google.generativeai as genai
+        # google.genai imported inline in functions to avoid module-level deprecation warnings
         colors = list(palette.values())
         primary = colors[0]["hex"] if colors else "#1B3A6B"
         accent  = colors[1]["hex"] if len(colors) > 1 else "#C9A84C"
@@ -430,24 +436,7 @@ def generate_logo_imagen(company: str, industry: str, personality: str, palette:
             f"suitable for business use. High quality, sharp edges, professional branding."
         )
 
-        # Try Imagen 3 (available via Gemini API)
-        try:
-            from google.generativeai import ImageGenerationConfig
-            imagen = genai.ImageGenerationModel("imagen-3.0-generate-002")
-            result = imagen.generate_images(
-                prompt=prompt,
-                number_of_images=1,
-                aspect_ratio="1:1",
-            )
-            if result.images:
-                import io
-                buf = io.BytesIO()
-                result.images[0]._pil_image.save(buf, format="PNG")
-                return buf.getvalue()
-        except Exception:
-            pass
-
-        # Try Gemini 2.0 Flash image generation (Nano Banana)
+        # Try Gemini image generation (Nano Banana)
         try:
             from google import genai as genai2
             from google.genai import types as gtypes
@@ -651,7 +640,7 @@ def calculate_roi(budget: float, platform: str, objective: str,
 
 # ── Nano Banana Pro Logo Generator ───────────────────────────────────────────
 def generate_logo_nano_banana(company: str, industry: str, personality: str,
-                               palette: dict, style: str = "minimalist") -> bytes | None:
+                               palette: dict, style: str = "minimalist") -> Optional[bytes]:
     """
     Generate an AI logo image using Nano Banana Pro (Gemini image model).
     Uses gemini-2.0-flash-exp for image generation — same API key as text Gemini.
@@ -660,7 +649,7 @@ def generate_logo_nano_banana(company: str, industry: str, personality: str,
     if not st.session_state.gemini_ok:
         return None
     try:
-        import google.generativeai as genai
+        # google.genai imported inline in functions to avoid module-level deprecation warnings
         colors = list(palette.values())
         primary   = colors[0]["hex"] if colors else "#1B3A6B"
         secondary = colors[1]["hex"] if len(colors) > 1 else "#C9A84C"
@@ -675,21 +664,22 @@ def generate_logo_nano_banana(company: str, industry: str, personality: str,
             f"No text other than the company name. Professional and modern."
         )
 
-        # Try Nano Banana 2 (gemini-2.0-flash-exp supports image generation)
-        for model_name in ["gemini-2.0-flash-exp", "gemini-1.5-flash"]:
-            try:
-                model    = genai.GenerativeModel(model_name)
-                response = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "image/png"}
-                )
-                # Check for image in response parts
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        import base64
-                        return base64.b64decode(part.inline_data.data)
-            except Exception:
-                continue
+        # Try Nano Banana / Gemini image generation
+        try:
+            from google import genai as _genai2
+            from google.genai import types as _gtypes
+            _client2 = _genai2.Client(api_key=st.session_state.api_key)
+            _resp = _client2.models.generate_content(
+                model="gemini-2.0-flash-preview-image-generation",
+                contents=prompt,
+                config=_gtypes.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
+            )
+            for part in _resp.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    import base64
+                    return base64.b64decode(part.inline_data.data)
+        except Exception:
+            pass
         return None
     except Exception as e:
         return None
@@ -1087,7 +1077,7 @@ with tabs[1]:
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    if st.button("🚀  Generate Full Brand Kit", use_container_width=False):
+    if st.button("🚀  Generate Full Brand Kit", width='content'):
         if not company:
             st.warning("Please enter a company name.")
         else:
@@ -1586,11 +1576,11 @@ with tabs[5]:
                 </div>""", unsafe_allow_html=True)
 
             st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-            st.plotly_chart(kpi_bar_chart(kpis), use_container_width=True)
+            st.plotly_chart(kpi_bar_chart(kpis), width='stretch')
 
             region_scores = {r: np.random.randint(58, 86) for r in REGIONS[:-1]}
             region_scores[region] = max(region_scores.values()) + 3
-            st.plotly_chart(regional_engagement_map(region_scores), use_container_width=True)
+            st.plotly_chart(regional_engagement_map(region_scores), width='stretch')
 
         if st.session_state.campaigns:
             st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
@@ -1628,7 +1618,7 @@ with tabs[5]:
         with roi_c3:
             roi_pers     = st.selectbox("Brand Personality", PERSONALITIES, key="roi_pers",
                                          index=PERSONALITIES.index(
-                                             st.session_state.brand_inputs.get("personality","Minimalist")
+                                             (st.session_state.brand_inputs or {}).get("personality","Minimalist")
                                          ) if st.session_state.brand_inputs else 0)
             roi_btn      = st.button("📊  Calculate ROI Projection", key="roi_btn")
 
@@ -1684,7 +1674,7 @@ with tabs[5]:
                     xaxis=dict(gridcolor="#2A2C31"),
                     yaxis=dict(gridcolor="#2A2C31"),
                 )
-                st.plotly_chart(fig_roi, use_container_width=True)
+                st.plotly_chart(fig_roi, width='stretch')
             st.caption(f"ℹ️  {roi_data['note']}")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1874,7 +1864,7 @@ with tabs[8]:
                         with st.spinner(f"Rendering {mtype}…"):
                             png = generate_mockup(svg, st.session_state.palette,
                                                    bi.get("company","Brand") if bi else "Brand", mtype)
-                        st.image(png, caption=mtype, use_container_width=True)
+                        st.image(png, caption=mtype, width='stretch')
                         st.download_button(
                             f"⬇ {mtype}", data=png,
                             file_name=f"{(bi.get('company','brand') if bi else 'brand').replace(' ','_')}_{mtype.replace(' ','_')}.png",
@@ -2057,15 +2047,15 @@ with tabs[9]:
         st.dataframe(df_log[["timestamp","module","rating","sentiment","comment"]]
                      .rename(columns={"timestamp":"Time","module":"Module",
                                       "rating":"Rating","sentiment":"Sentiment","comment":"Comment"}),
-                     use_container_width=True, hide_index=True)
+                     width='stretch', hide_index=True)
 
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         st.markdown('<p class="sec-label">Feedback Analytics</p>', unsafe_allow_html=True)
         fc1, fc2 = st.columns(2)
         with fc1:
-            st.plotly_chart(feedback_bar(df_log), use_container_width=True)
+            st.plotly_chart(feedback_bar(df_log), width='stretch')
         with fc2:
-            st.plotly_chart(feedback_pie(df_log), use_container_width=True)
+            st.plotly_chart(feedback_pie(df_log), width='stretch')
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  TAB 10 — DOWNLOAD KIT
@@ -2159,7 +2149,7 @@ with tabs[10]:
 
         # Brand Personality Radar
         if bi.get("personality"):
-            st.plotly_chart(personality_radar(bi["personality"]), use_container_width=True)
+            st.plotly_chart(personality_radar(bi["personality"]), width='stretch')
 
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
@@ -2214,7 +2204,7 @@ with tabs[10]:
             qa_cols = st.columns(3)
             for i, (label, prompt) in enumerate(quick_actions):
                 with qa_cols[i % 3]:
-                    if st.button(label, key=f"qa_{i}", use_container_width=True):
+                    if st.button(label, key=f"qa_{i}", width='stretch'):
                         st.session_state.chat_history.append({"role":"user","content":prompt})
                         ctx = (f"Brand: {company_name} | Industry: {industry_name} | "
                                f"Personality: {bi.get('personality','')} | Tone: {bi.get('tone','')} | "
