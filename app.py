@@ -1805,7 +1805,7 @@ with tabs[8]:
             "Luxury monogram",
             "Modern wordmark",
             "Abstract icon",
-        ], key="nb_style")
+        ], key="nb_style_1")
         nb_bg = st.radio("Background", ["White", "Transparent (white)", "Brand Color"], horizontal=True, key="nb_bg")
 
     with nb_col2:
@@ -1937,14 +1937,14 @@ with tabs[8]:
     rc1, rc2, rc3 = st.columns(3, gap="large")
     with rc1:
         roi_budget   = st.number_input("Campaign Budget ($)", min_value=100, max_value=1000000,
-                                        value=5000, step=500, key="roi_budget")
-        roi_platform = st.selectbox("Platform", PLATFORMS, key="roi_plat")
+                                        value=5000, step=500, key="roi_budget_1")
+        roi_platform = st.selectbox("Platform", PLATFORMS, key="roi_plat_1")
     with rc2:
-        roi_obj      = st.selectbox("Objective", CAMPAIGN_OBJECTIVES, key="roi_obj")
+        roi_obj      = st.selectbox("Objective", CAMPAIGN_OBJECTIVES, key="roi_obj_1")
         roi_days     = st.slider("Duration (days)", 7, 90, 30, key="roi_days")
     with rc3:
         roi_audience = st.number_input("Est. Audience Size", min_value=1000,
-                                        max_value=50000000, value=100000, step=10000, key="roi_aud")
+                                        max_value=50000000, value=100000, step=10000, key="roi_aud_1")
         roi_ctr      = st.slider("Expected CTR (%)", 0.5, 10.0, 2.5, step=0.1, key="roi_ctr")
 
     if st.button("📊  Calculate ROI Projection"):
